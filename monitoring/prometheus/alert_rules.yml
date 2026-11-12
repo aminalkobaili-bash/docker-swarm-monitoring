@@ -1,0 +1,32 @@
+groups:
+  - name: critical
+    rules:
+      # Доступная память на ноде меньше 100 МБ
+      - alert: LowAvailableMemory
+        expr: node_memory_MemAvailable_bytes * on(instance) group_left(nodename) node_uname_info < 100 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Мало доступной памяти на {{ $labels.nodename }}"
+          description: "Доступно {{ $value | humanize1024 }}B, порог 100 МБ"
+
+      # Затраченная RAM на ноде больше 1 ГБ (та же формула, что на панели дашборда)
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) * on(instance) group_left(nodename) node_uname_info > 1024 * 1024 * 1024
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Затрачено больше 1 ГБ RAM на {{ $labels.nodename }}"
+          description: "Занято {{ $value | humanize1024 }}B, порог 1 ГБ"
+
+      # Использование CPU сервисом больше 10% (процент от одного ядра, по всем репликам сервиса)
+      - alert: HighServiceCpuUsage
+        expr: sum by (container_label_com_docker_swarm_service_name) (rate(container_cpu_usage_seconds_total{container_label_com_docker_swarm_service_name!=""}[1m])) * 100 > 10
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сервис {{ $labels.container_label_com_docker_swarm_service_name }} использует больше 10% CPU"
+          description: "Загрузка CPU {{ $value | printf \"%.1f\" }}%, порог 10%"

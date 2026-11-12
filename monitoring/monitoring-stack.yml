@@ -1,0 +1,214 @@
+# docker stack deploy читает legacy-формат Compose v3, поэтому version здесь нужен
+version: "3.8"
+
+# Деплой (из корня репозитория, после стека myapp и docker secret create):
+#   docker stack deploy -c monitoring/monitoring-stack.yml monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    configs:
+      - source: prometheus_yml
+        target: /etc/prometheus/prometheus.yml
+      - source: alert_rules_yml
+        target: /etc/prometheus/alert_rules.yml
+    volumes:
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring
+      - app-network
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 512M
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    hostname: "{{.Node.Hostname}}"
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - monitoring
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 64M
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /run/containerd:/run/containerd:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - monitoring
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 256M
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.29.1
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  loki:
+    image: grafana/loki:3.6.10
+    command:
+      - -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "3100:3100"
+    configs:
+      - source: loki_config
+        target: /etc/loki/loki-config.yml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - monitoring
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 384M
+
+  # Сборщик логов на каждой ноде (замена Promtail)
+  alloy:
+    image: grafana/alloy:v1.21.3
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      NODE_HOSTNAME: "{{.Node.Hostname}}"
+    configs:
+      - source: alloy_config
+        target: /etc/alloy/config.alloy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    networks:
+      - monitoring
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 128M
+
+  grafana:
+    image: grafana/grafana:12.4.15
+    ports:
+      - "3000:3000"
+    configs:
+      - source: grafana_datasources
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+      - source: grafana_dashboards_provider
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: grafana_dashboard_do9
+        target: /etc/grafana/provisioning/dashboards/do9-dashboard.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 256M
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    configs:
+      - source: alertmanager_yml
+        target: /etc/alertmanager/alertmanager.yml
+    volumes:
+      - alertmanager-data:/alertmanager
+    secrets:
+      - smtp_password
+      - telegram_bot_token
+      - telegram_chat_id
+    networks:
+      - monitoring
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  prometheus-data:
+  loki-data:
+  alloy-data:
+  grafana-data:
+  alertmanager-data:
+
+networks:
+  monitoring:
+    driver: overlay
+  # Сеть стека приложения: через неё Prometheus обращается к Java-сервисам по имени
+  app-network:
+    external: true
+    name: myapp_app-network
+
+# Swarm configs: файлы загружаются в кластер при деплое и доступны на любой ноде.
+# Config неизменяем: после правки файла смените имя (например, prometheus_yml_v2).
+configs:
+  prometheus_yml:
+    file: ./prometheus/prometheus.yml
+  alert_rules_yml:
+    file: ./prometheus/alert_rules.yml
+  loki_config:
+    file: ./loki/loki-config.yml
+  alloy_config:
+    file: ./alloy/config.alloy
+  alertmanager_yml:
+    file: ./alertmanager/alertmanager.yml
+  grafana_datasources:
+    file: ./grafana/provisioning/datasources/datasources.yml
+  grafana_dashboards_provider:
+    file: ./grafana/provisioning/dashboards/dashboards.yml
+  grafana_dashboard_do9:
+    file: ./grafana/provisioning/dashboards/do9-dashboard.json
+
+# Секреты создаются вручную на менеджере командой docker secret create и не хранятся в Git
+secrets:
+  smtp_password:
+    external: true
+  telegram_bot_token:
+    external: true
+  telegram_chat_id:
+    external: true

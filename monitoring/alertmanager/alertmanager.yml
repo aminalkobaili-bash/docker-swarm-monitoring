@@ -1,0 +1,27 @@
+route:
+  receiver: email-and-telegram
+  # Алерты с одинаковым именем объединяются в одно уведомление
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: email-and-telegram
+    email_configs:
+      # Замените на свой адрес: отправитель и получатель — один ящик Яндекса
+      - to: alerts@example.com
+        from: alerts@example.com
+        smarthost: smtp.yandex.ru:587
+        auth_username: alerts@example.com
+        # Пароль приложения почты хранится в Docker secret, а не в Git
+        auth_password_file: /run/secrets/smtp_password
+        require_tls: true
+        send_resolved: true
+
+    telegram_configs:
+      # Токен бота от @BotFather и ID чата хранятся в Docker secrets, а не в Git
+      - bot_token_file: /run/secrets/telegram_bot_token
+        chat_id_file: /run/secrets/telegram_chat_id
+        parse_mode: HTML
+        send_resolved: true

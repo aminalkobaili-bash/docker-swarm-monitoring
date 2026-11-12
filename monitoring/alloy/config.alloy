@@ -1,0 +1,51 @@
+// Grafana Alloy (замена Promtail, который снят с поддержки 2 марта 2026).
+// Запущен на каждой ноде (deploy mode: global) и читает логи контейнеров через Docker API.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "myapp" {
+  targets = discovery.docker.containers.targets
+
+  // Только контейнеры стека приложения
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_stack_namespace"]
+    regex         = "myapp"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_stack_namespace"]
+    target_label  = "stack"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_swarm_service_name"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Имя ноды передаётся из monitoring-stack.yml шаблоном {{.Node.Hostname}}
+  rule {
+    target_label = "node"
+    replacement  = sys.env("NODE_HOSTNAME")
+  }
+}
+
+loki.source.docker "myapp" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.myapp.output
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

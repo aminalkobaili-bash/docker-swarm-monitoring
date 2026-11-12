@@ -1,0 +1,9 @@
+* text=auto
+
+# Scripts run inside Linux containers / VMs: always LF
+*.sh   text eol=lf
+mvnw   text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jar  binary

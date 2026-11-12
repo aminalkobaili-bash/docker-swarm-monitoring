@@ -1,0 +1,163 @@
+# docker stack deploy читает legacy-формат Compose v3, поэтому version здесь нужен
+version: "3.8"
+
+# Деплой (из корня репозитория, с переменными из .env):
+#   set -a; . ./.env; set +a
+#   docker stack deploy -c swarm/app-stack.yml myapp
+# Имя стека myapp важно: monitoring-stack подключается к сети myapp_app-network.
+
+x-java-resources: &java-resources
+  resources:
+    limits:
+      memory: 512M
+    reservations:
+      memory: 384M
+
+x-postgres-env: &postgres-env
+  JAVA_TOOL_OPTIONS: "-Xmx192m -XX:+UseSerialGC"
+  POSTGRES_HOST: database
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?export JWT_PRIVATE_KEY from .env}
+  JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?export JWT_PUBLIC_KEY from .env}
+
+x-rabbit-env: &rabbit-env
+  RABBIT_MQ_HOST: rabbitmq
+  RABBIT_MQ_PORT: 5672
+  RABBIT_MQ_USER: guest
+  RABBIT_MQ_PASSWORD: guest
+  RABBIT_MQ_QUEUE_NAME: booking_queue
+  RABBIT_MQ_EXCHANGE: booking_exchange
+
+services:
+  database:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    configs:
+      - source: init_sql
+        target: /docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+
+  rabbitmq:
+    image: rabbitmq:4.3.7-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - app-network
+
+  session-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/session-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: users_db
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  hotel-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/hotel-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: hotels_db
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  booking-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/booking-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: [*postgres-env, *rabbit-env]
+      POSTGRES_DB: reservations_db
+      SESSION_SERVICE_HOST: session-service
+      SESSION_SERVICE_PORT: 8081
+      HOTEL_SERVICE_HOST: hotel-service
+      HOTEL_SERVICE_PORT: 8082
+      PAYMENT_SERVICE_HOST: payment-service
+      PAYMENT_SERVICE_PORT: 8084
+      LOYALTY_SERVICE_HOST: loyalty-service
+      LOYALTY_SERVICE_PORT: 8085
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  payment-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/payment-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: payments_db
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  loyalty-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/loyalty-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: balances_db
+      SESSION_SERVICE_HOST: session-service
+      SESSION_SERVICE_PORT: 8081
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  report-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/report-service:${IMAGE_TAG:-metrics}
+    environment:
+      <<: [*postgres-env, *rabbit-env]
+      POSTGRES_DB: statistics_db
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  gateway-service:
+    image: ${IMAGE_REGISTRY:-aminblack}/gateway-service:${IMAGE_TAG:-metrics}
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx192m -XX:+UseSerialGC"
+      SESSION_SERVICE_HOST: session-service
+      SESSION_SERVICE_PORT: 8081
+      HOTEL_SERVICE_HOST: hotel-service
+      HOTEL_SERVICE_PORT: 8082
+      BOOKING_SERVICE_HOST: booking-service
+      BOOKING_SERVICE_PORT: 8083
+      LOYALTY_SERVICE_HOST: loyalty-service
+      LOYALTY_SERVICE_PORT: 8085
+      REPORT_SERVICE_HOST: report-service
+      REPORT_SERVICE_PORT: 8086
+    networks:
+      - app-network
+    deploy: *java-resources
+
+  nginx:
+    image: nginx:1.30.6-alpine
+    ports:
+      - "8081:8081"
+      - "8087:8087"
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+    networks:
+      - app-network
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+
+# Swarm configs: файл загружается в кластер при деплое и доступен на любой ноде.
+# Config неизменяем: после правки файла смените имя (например, nginx_conf_v2).
+configs:
+  init_sql:
+    file: ../db/init.sql
+  nginx_conf:
+    file: ../nginx/nginx.conf
+
+networks:
+  app-network:
+    driver: overlay

@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Vagrant / Swarm runtime state
+.vagrant/
+worker_token
+
+# Build output
+target/
+
+# Local tooling (graphify knowledge graph, Claude Code settings)
+graphify-out/
+CLAUDE.md
+.claude/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

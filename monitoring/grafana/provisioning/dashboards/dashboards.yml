@@ -1,0 +1,11 @@
+apiVersion: 1
+
+# Grafana загружает все *.json из этой папки как дашборды
+providers:
+  - name: do9
+    folder: DO9
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards

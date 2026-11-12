@@ -1,0 +1,6 @@
+# Контекст сборки — корень репо: пропускаем только то, что нужно Dockerfile
+*
+!docker/wait-for-it.sh
+!services/*/pom.xml
+!services/*/src/
+services/*/target/

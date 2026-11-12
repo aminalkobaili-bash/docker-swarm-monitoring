@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+
+# Один Dockerfile для всех 7 Spring Boot сервисов.
+# Контекст сборки — корень репозитория, сервис выбирается аргументом:
+#   docker build -f docker/Dockerfile.java-service --build-arg SERVICE=booking-service .
+
+# Этап 1: сборка jar (JDK + Maven). Кэш ~/.m2 переживает пересборки
+FROM maven:3.9.16-eclipse-temurin-8 AS builder
+ARG SERVICE
+WORKDIR /app
+COPY services/${SERVICE}/pom.xml .
+RUN --mount=type=cache,target=/root/.m2 mvn -B dependency:go-offline
+COPY services/${SERVICE}/src ./src
+RUN --mount=type=cache,target=/root/.m2 mvn -B clean package -DskipTests
+
+# Этап 2: только JRE + jar. bash для wait-for-it.sh уже есть в Ubuntu-образе
+FROM eclipse-temurin:8u504-b01-jre-noble
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+WORKDIR /app
+COPY --from=builder /app/target/*.jar app.jar
+COPY --chmod=0755 docker/wait-for-it.sh wait-for-it.sh
+USER app
+# depends_on в Swarm не работает, поэтому ожидание БД остаётся в самом образе
+ENTRYPOINT ["./wait-for-it.sh", "database:5432", "--", "java", "-jar", "app.jar"]
